@@ -1,5 +1,31 @@
 # Model training & sampling
 
+## Held-out baseline on Modal (Llama 3.1-8B-Instruct)
+
+The paper trained on all labeled data, so it has no clean test set. These steps build one.
+Run everything from `model_training/`. You need the Modal CLI (`pip install modal`, `modal setup`),
+access to `meta-llama/Meta-Llama-3.1-8B-Instruct` on Hugging Face, and a Modal secret named
+`huggingface` holding `HF_TOKEN`.
+
+1. Split by conversation (already committed; rerun only to change the split):
+   `python make_labeled_split.py`
+   writes `data/feedback_qesconv_labeledsplit/` with 320 train and 80 test conversations
+   (6,482 and 1,697 examples). Each test example is tagged `original` (a real Helper turn, 982)
+   or `gold_alternative` (the turn replaced by the gold alternative and labeled perfect, 715).
+2. Smoke test, about 15 minutes and under $1:
+   `modal run finetune_llama_serverless.py --run-name sft_smoke --max-train-samples 200 --max-steps 20`
+   `modal run generate_eval_serverless.py --model sft_smoke --max-prompts 20`
+3. Full SFT on the train split with the paper's settings (about 1 to 1.5 hours on an H100):
+   `modal run --detach finetune_llama_serverless.py --run-name sft_labeledsplit`
+4. One greedy generation per test prompt, plus P("perfect" = true):
+   `modal run generate_eval_serverless.py --model sft_labeledsplit`
+   `modal run generate_eval_serverless.py --model meta-llama/Meta-Llama-3.1-8B-Instruct --prompt-style instruct --tag base_instruct`
+5. Score locally (`pip install sacrebleu rouge-score scikit-learn numpy bert-score`):
+   `python evaluate_baseline.py exp/sft_labeledsplit_feedback_qesconv_labeledsplit_eval.json --bertscore`
+   Headline numbers are the `original` subset.
+
+## Original paper commands
+
 ### Fine-tuning the model
 
 ```

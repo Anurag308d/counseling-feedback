@@ -1,127 +1,149 @@
 """
-Fine-tune LLaMA model using Modal for serverless execution.
+Fine-tune Llama 3.1-8B-Instruct (QLoRA) on Modal for serverless execution.
 
-To run this script, ensure you have Modal installed and configured. 
-Make sure you are in the model_training directory. Then run
-```bash
-modal run finetune_llama_serverless.py
-```
-Assumes the labeled train/test split datasets have been saved and available locally at model_training/data/feedback_qesconv_labeledsplit/
+Run from the model_training directory.
+
+Smoke test (about 15 minutes, under $1):
+    modal run finetune_llama_serverless.py --run-name sft_smoke --max-train-samples 200 --max-steps 20
+
+Full held-out baseline run (paper settings, train split only):
+    modal run --detach finetune_llama_serverless.py --run-name sft_labeledsplit
+
+Assumes the labeled split exists at model_training/data/feedback_qesconv_labeledsplit/
+(create it with `python make_labeled_split.py`) and a Modal secret named "huggingface"
+holding HF_TOKEN.
+
+Outputs go to the "trained-llama-models" volume, under /root/model_training/models/<run-name>/:
+    final_checkpoint/          LoRA adapter
+    final_merged_checkpoint/   merged bf16 model, used by generate_eval_serverless.py
+    train_config.json, train_log.json
+
+Changes from the version we were given (see the part 1 plan):
+  * Examples end with the Llama 3 EOS token instead of the literal "<s>"/"</s>", which are
+    Llama 2 tokens and plain text to the Llama 3 tokenizer, so the model never learned to stop.
+  * The pad token is a dedicated Llama 3.1 pad token, not EOS: the LM collator masks every pad
+    id out of the loss, so pad == EOS would also hide the EOS the model needs to learn.
+  * The rope_scaling override (linear, 8.0) is removed; Llama 3.1 ships its own "llama3" rope
+    scaling and the generation scripts never applied the override.
+  * Hyperparameters follow the paper's README recipe (effective batch 32, lr 3e-4, cosine,
+    100 warmup steps, weight decay 0.01, no packing, max length 2048). The paper ran 766 steps
+    on all 8,179 examples, which is 3 epochs; here we train 3 epochs on the train split.
+  * Package versions are pinned, base weights are cached on a volume, and the timeout is 4 h.
 """
-import modal
+import json
 import os
-from dataclasses import dataclass, field
-from typing import Optional
+
+import modal
 
 app = modal.App("finetune-multilevelfeedback-llama")
 
-# Define persistent modal volume for trained models
 MODEL_VOLUME = modal.Volume.from_name("trained-llama-models", create_if_missing=True)
+HF_CACHE_VOLUME = modal.Volume.from_name("hf-cache", create_if_missing=True)
 
-# Define dependencies - similar to the original script but adapted for Modal
+BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+MODELS_DIR = "/root/model_training/models"
+# Llama 3.1 reserves this token for padding (id 128004).
+PAD_TOKEN = "<|finetune_right_pad_id|>"
+
 image = (
-    modal.Image.debian_slim()
+    modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch",
-        "transformers",
-        "accelerate",
-        "peft",
-        "datasets",
-        "trl",
-        "bitsandbytes",
-        "python-dotenv",
-        "numpy",
+        "torch==2.5.1",
+        "transformers==4.46.3",
+        "accelerate==1.1.1",
+        "peft==0.13.2",
+        "datasets==3.1.0",
+        "trl==0.12.2",
+        "bitsandbytes==0.45.0",
+        "numpy<2.2",
         "scipy",
     )
-    .add_local_dir(".", remote_path="/root/model_training", ignore=["venv", "__pycache__", "*.git*"])
+    .env({"HF_HOME": "/root/hf-cache", "TOKENIZERS_PARALLELISM": "false"})
+    .add_local_dir(".", remote_path="/root/model_training",
+                   ignore=["venv", "__pycache__", "*.git*", "models", "exp"])
 )
 
-@dataclass
-class ScriptArguments:
-    model_name: Optional[str] = field(default="meta-llama/Meta-Llama-3.1-8B-Instruct", metadata={"help": "the model name"})
-    packing: Optional[bool] = field(default=True, metadata={"help": "whether to use packing for SFTTrainer"})
-    dataset_name: Optional[str] = field(
-        default="feedback_qesconv_labeledsplit", metadata={"help": "dataset name"}
-    )
 
-    # LoraConfig
-    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
-    lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
-    lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
-
-    # Training arguments
-    per_device_train_batch_size: Optional[int] = field(default=1, metadata={"help": "batch size per device"})
-    gradient_accumulation_steps: Optional[int] = field(default=4, metadata={"help": "gradient accumulation steps"})
-    warmup_steps: Optional[int] = field(default=100, metadata={"help": "warmup steps"})
-    num_train_epochs: Optional[float] = field(default=3.0, metadata={"help": "number of training epochs"})
-    learning_rate: Optional[float] = field(default=2e-4, metadata={"help": "learning rate"})
-    optim: Optional[str] = field(default="paged_adamw_32bit", metadata={"help": "optimizer"})
-    weight_decay: Optional[float] = field(default=0.001, metadata={"help": "weight decay"})
-    lr_scheduler_type: Optional[str] = field(default="linear", metadata={"help": "learning rate scheduler"})
-    output_dir: Optional[str] = field(default="/root/model_training/models/output", metadata={"help": "SFT output directory"})
-    report_to: Optional[str] = field(default="none", metadata={"help": "reporting"})
-    gradient_checkpointing: Optional[bool] = field(default=True, metadata={"help": "gradient checkpointing"})
-
-    # HF Token
-    hf_token: Optional[str] = field(default=None, metadata={"help": "HuggingFace token"})
-
-
-# Using H100 GPU like in the SetFit example
 @app.function(
     image=image,
     gpu="H100",
-    timeout=86400,  # 24 hours
-    volumes={"/root/model_training/models": MODEL_VOLUME},
-    secrets=[modal.Secret.from_name("huggingface")]  # Assumes HF token is stored as secret
+    timeout=4 * 60 * 60,  # hard cap on spend: about $16 at H100 rates
+    volumes={MODELS_DIR: MODEL_VOLUME, "/root/hf-cache": HF_CACHE_VOLUME},
+    secrets=[modal.Secret.from_name("huggingface")],
 )
 def train_llama_model(
-    model_name: str = "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    run_name: str,
+    model_name: str = BASE_MODEL,
     dataset_name: str = "feedback_qesconv_labeledsplit",
     num_train_epochs: float = 3.0,
-    learning_rate: float = 2e-4,
+    max_steps: int = -1,
+    max_train_samples: int = 0,
+    learning_rate: float = 3e-4,
     per_device_train_batch_size: int = 1,
-    gradient_accumulation_steps: int = 4,
+    gradient_accumulation_steps: int = 32,
+    warmup_steps: int = 100,
+    weight_decay: float = 0.01,
+    lr_scheduler_type: str = "cosine",
+    max_seq_length: int = 2048,
+    packing: bool = False,
+    gradient_checkpointing: bool = False,
     lora_r: int = 8,
     lora_alpha: float = 16,
     lora_dropout: float = 0.05,
+    seed: int = 42,
 ):
-    print("Files inside /root/model_training:")
-    print(os.listdir("/root/model_training"))
-
     import torch
-    from transformers import (
-        BitsAndBytesConfig,
-        AutoModelForCausalLM,
-        AutoTokenizer,
-        AutoConfig,
-        TrainingArguments,
-        set_seed
-    )
     from datasets import load_dataset
-    from trl import SFTTrainer, SFTConfig
-    from peft import LoraConfig, AutoPeftModelForCausalLM
+    from peft import AutoPeftModelForCausalLM, LoraConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, set_seed
+    from trl import SFTConfig, SFTTrainer
 
-    # Set seed for reproducibility
-    set_seed(42)
-
-    # Get HF token from Modal secret
-    access_token = os.environ.get("HF_TOKEN")
-
-    # Set environment variables
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    set_seed(seed)
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    access_token = os.environ.get("HF_TOKEN")
+    output_dir = os.path.join(MODELS_DIR, run_name)
+    os.makedirs(output_dir, exist_ok=True)
+    config = dict(locals())
+    config.pop("access_token")
+    with open(os.path.join(output_dir, "train_config.json"), "w") as f:
+        json.dump({k: v for k, v in config.items() if isinstance(v, (str, int, float, bool))}, f, indent=2)
 
-    current_device = torch.cuda.current_device()
-    print("Current GPU: ", current_device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=access_token)
+    tokenizer.pad_token = PAD_TOKEN
+    tokenizer.padding_side = "right"
+    assert tokenizer.pad_token_id != tokenizer.eos_token_id
+    print(f"eos={tokenizer.eos_token!r} ({tokenizer.eos_token_id}) pad={tokenizer.pad_token!r} ({tokenizer.pad_token_id})")
 
-    # Load the model config and adjust rope_scaling
-    config = AutoConfig.from_pretrained(model_name, token=access_token)
-    config.rope_scaling = {
-        "type": "linear",
-        "factor": 8.0
-    }
+    data_dir = f"/root/model_training/data/{dataset_name}"
+    dataset = load_dataset("json", data_files={"train": f"{data_dir}/train.json"},
+                           cache_dir="/root/hf-cache/datasets")["train"]
+    if max_train_samples:
+        dataset = dataset.shuffle(seed=seed).select(range(min(max_train_samples, len(dataset))))
+    # The tokenizer adds <|begin_of_text|> itself; we only append EOS so the model learns to stop.
+    dataset = dataset.map(lambda x: {"text": x["text"] + tokenizer.eos_token},
+                          remove_columns=[c for c in dataset.column_names if c != "text"])
+    print(f"train examples: {len(dataset)}")
+    print("sample text:\n" + dataset[0]["text"])
 
-    # PEFT configuration
+    ids = tokenizer(dataset[0]["text"])["input_ids"]
+    assert ids[0] == tokenizer.bos_token_id and ids[-1] == tokenizer.eos_token_id, \
+        "expected <|begin_of_text|> ... EOS after tokenization"
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
+    base_model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        quantization_config=bnb_config,
+        device_map={"": 0},
+        torch_dtype=torch.bfloat16,
+        token=access_token,
+    )
+    base_model.config.use_cache = False
+    base_model.config.pad_token_id = tokenizer.pad_token_id
+
     peft_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -131,175 +153,91 @@ def train_llama_model(
         task_type="CAUSAL_LM",
     )
 
-    print("---------------------------------")
-    print(f"Loading tokenizer for {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=access_token)
-    print("---------------------------------")
-
-    # Load dataset
-    try:
-        dataset = load_dataset(
-            "json",
-            data_files={
-                "train": f"/root/model_training/data/{dataset_name}/train.json",
-                "test": f"/root/model_training/data/{dataset_name}/test.json"
-            },
-            split={"train": "train", "test": "test"},
-            cache_dir="/root/model_training/cache"
-        )
-        print(f"Successfully loaded dataset: {dataset_name}")
-    except Exception as e:
-        print(f"FAILED TO LOAD DATASET: {e}")
-        return None
-
-    tokenizer.pad_token_id = tokenizer.eos_token_id
-    tokenizer.padding_side = 'right'
-
-    # Format dataset
-    dataset['train'] = dataset['train'].map(lambda x: {'text': f'<s>{x["text"]}</s>'})
-
-    print("Printing length of train dataset: ", len(dataset['train']))
-    print('---------------------------------')
-    print("Sample text:")
-    print(dataset['train'][0]['text'])
-    print('---------------------------------')
-
-    # BitsAndBytes configuration for 4-bit quantization
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-
-    # Load base model
-    base_model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        config=config,
-        quantization_config=bnb_config,
-        device_map="auto",
-        token=access_token,
-    )
-
-    # Enable gradient checkpointing for memory efficiency
-    base_model.gradient_checkpointing_enable()
-    base_model.config.use_cache = False
-
-    # Create training arguments
-    training_args = TrainingArguments(
-        output_dir="/root/model_training/models/output",
+    sft_config = SFTConfig(
+        output_dir=output_dir,
+        num_train_epochs=num_train_epochs,
+        max_steps=max_steps,
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        warmup_steps=100,
-        num_train_epochs=num_train_epochs,
         learning_rate=learning_rate,
+        lr_scheduler_type=lr_scheduler_type,
+        warmup_steps=warmup_steps,
+        weight_decay=weight_decay,
         optim="paged_adamw_32bit",
-        weight_decay=0.001,
-        lr_scheduler_type="linear",
-        report_to="none",
-        gradient_checkpointing=True,
+        bf16=True,
+        gradient_checkpointing=gradient_checkpointing,
+        group_by_length=False,
         logging_steps=10,
         save_steps=100,
+        save_total_limit=3,
+        report_to="none",
+        seed=seed,
+        dataset_text_field="text",
+        max_seq_length=max_seq_length,
+        packing=packing,
+        dataset_num_proc=4,
     )
 
-    # Create SFT trainer
     trainer = SFTTrainer(
         model=base_model,
-        train_dataset=dataset['train'],
+        args=sft_config,
+        train_dataset=dataset,
         peft_config=peft_config,
         processing_class=tokenizer,
-        args=SFTConfig(
-            per_device_train_batch_size=training_args.per_device_train_batch_size,
-            gradient_accumulation_steps=training_args.gradient_accumulation_steps,
-            warmup_steps=training_args.warmup_steps,
-            num_train_epochs=training_args.num_train_epochs,
-            learning_rate=training_args.learning_rate,
-            optim=training_args.optim,
-            weight_decay=training_args.weight_decay,
-            lr_scheduler_type=training_args.lr_scheduler_type,
-            output_dir=training_args.output_dir,
-            report_to=training_args.report_to,
-            dataset_num_proc=4,
-            packing=True,
-            dataset_text_field="text",
-            logging_steps=training_args.logging_steps,
-            save_steps=training_args.save_steps,
-        ),
     )
 
-    # Train the model
     print("Starting training...")
     results = trainer.train()
     print("Training results:", results)
+    with open(os.path.join(output_dir, "train_log.json"), "w") as f:
+        json.dump(trainer.state.log_history, f, indent=2)
 
-    # Save the trained model
-    trainer.save_model(training_args.output_dir)
+    adapter_dir = os.path.join(output_dir, "final_checkpoint")
+    trainer.model.save_pretrained(adapter_dir)
+    tokenizer.save_pretrained(adapter_dir)
+    MODEL_VOLUME.commit()
 
-    output_dir = os.path.join(training_args.output_dir, "final_checkpoint")
-    trainer.model.save_pretrained(output_dir)
-
-    # Free memory for merging weights
-    del base_model
+    del trainer, base_model
     torch.cuda.empty_cache()
 
-    print("Loading model for merging...")
-    model = AutoPeftModelForCausalLM.from_pretrained(
-        output_dir,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
-
-    # Merge and unload LoRA weights
+    print("Merging LoRA weights...")
+    model = AutoPeftModelForCausalLM.from_pretrained(adapter_dir, device_map={"": 0},
+                                                     torch_dtype=torch.bfloat16, token=access_token)
     model = model.merge_and_unload()
-
-    output_merged_dir = os.path.join(training_args.output_dir, "final_merged_checkpoint")
-
-    # Save the final merged model
-    try:
-        model.save_pretrained(output_merged_dir, safe_serialization=True)
-        tokenizer.save_pretrained(output_merged_dir)
-        print(f"Model successfully saved to {output_merged_dir}")
-    except Exception as e:
-        print(f"Error saving model: {e}")
-        return None
-
-    print("TRAINING COMPLETE")
-    return output_merged_dir
+    merged_dir = os.path.join(output_dir, "final_merged_checkpoint")
+    model.save_pretrained(merged_dir, safe_serialization=True)
+    tokenizer.save_pretrained(merged_dir)
+    MODEL_VOLUME.commit()
+    print(f"TRAINING COMPLETE: {merged_dir}")
+    return merged_dir
 
 
 @app.local_entrypoint()
 def main(
-    model_name: str = "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    run_name: str = "sft_labeledsplit",
+    model_name: str = BASE_MODEL,
     dataset_name: str = "feedback_qesconv_labeledsplit",
     num_train_epochs: float = 3.0,
-    learning_rate: float = 2e-4,
-    per_device_train_batch_size: int = 1,
-    gradient_accumulation_steps: int = 4,
-    lora_r: int = 8,
-    lora_alpha: float = 16,
-    lora_dropout: float = 0.05,
+    max_steps: int = -1,
+    max_train_samples: int = 0,
+    learning_rate: float = 3e-4,
+    gradient_accumulation_steps: int = 32,
+    warmup_steps: int = 100,
 ):
-    print(f"Starting LLaMA fine-tuning with model: {model_name}")
-    print(f"Dataset: {dataset_name}")
-    print(f"Training epochs: {num_train_epochs}")
-    print(f"Learning rate: {learning_rate}")
-    print(f"Batch size: {per_device_train_batch_size}")
-    print(f"LoRA r: {lora_r}, alpha: {lora_alpha}, dropout: {lora_dropout}")
-
-    # Run the training
-    model_path = train_llama_model.remote(
+    if max_steps > 0 and max_steps < warmup_steps:
+        warmup_steps = max(1, max_steps // 10)
+    print(f"run={run_name} model={model_name} dataset={dataset_name} epochs={num_train_epochs} "
+          f"max_steps={max_steps} max_train_samples={max_train_samples} lr={learning_rate} "
+          f"grad_accum={gradient_accumulation_steps} warmup={warmup_steps}")
+    path = train_llama_model.remote(
+        run_name=run_name,
         model_name=model_name,
         dataset_name=dataset_name,
         num_train_epochs=num_train_epochs,
+        max_steps=max_steps,
+        max_train_samples=max_train_samples,
         learning_rate=learning_rate,
-        per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
-        lora_r=lora_r,
-        lora_alpha=lora_alpha,
-        lora_dropout=lora_dropout,
+        warmup_steps=warmup_steps,
     )
-
-    if model_path:
-        print(f"Training completed successfully!")
-        print(f"Model saved to: {model_path}")
-    else:
-        print("Training failed!")
+    print(f"Model saved to: {path}")
