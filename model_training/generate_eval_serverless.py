@@ -33,7 +33,9 @@ HF_SECRET_NAME = os.environ.get("MODAL_HF_SECRET", f"{PREFIX}-huggingface")
 
 app = modal.App(f"{PREFIX}-generate-eval")
 
-MODEL_VOLUME = modal.Volume.from_name(f"{PREFIX}-models", create_if_missing=True)
+# Override when a model was trained into another volume, e.g. MODAL_MODELS_VOLUME=trained-llama-models
+MODELS_VOLUME_NAME = os.environ.get("MODAL_MODELS_VOLUME", f"{PREFIX}-models")
+MODEL_VOLUME = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=True)
 HF_CACHE_VOLUME = modal.Volume.from_name(f"{PREFIX}-hf-cache", create_if_missing=True)
 MODELS_DIR = "/root/model_training/models"
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
@@ -95,7 +97,15 @@ def generate(model: str, tag: str, dataset_name: str, prompts_file: str, prompt_
 
     os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", os.environ.get("HF_TOKEN", ""))
     merged = os.path.join(MODELS_DIR, model, "final_merged_checkpoint")
-    model_path = merged if os.path.isdir(merged) else model
+    if os.path.isdir(merged):
+        model_path = merged
+    elif "/" in model:
+        model_path = model  # a Hugging Face model id
+    else:
+        runs = sorted(d for d in os.listdir(MODELS_DIR)
+                      if os.path.isdir(os.path.join(MODELS_DIR, d, "final_merged_checkpoint")))
+        raise SystemExit(f"No trained run '{model}' in volume {MODELS_VOLUME_NAME}. "
+                         f"Runs with a merged checkpoint there: {runs or 'none'}")
     print(f"Loading {model_path}")
 
     with open(f"/root/model_training/data/{dataset_name}/{prompts_file}") as f:
