@@ -91,11 +91,16 @@ def call_groq(messages, model, max_retries=8):
     time.sleep(CALL_DELAY)
     model = _active.get(model, model)
     use_json_mode = True
+    use_reasoning_effort = "gpt-oss" in model
+    max_tokens = 1500  # reasoning models (gpt-oss) spend tokens thinking before the JSON
+    bad_requests = 0
     attempt = 0
     while attempt < max_retries:
-        payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 400}
+        payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}
         if use_json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if use_reasoning_effort and "gpt-oss" in model:
+            payload["reasoning_effort"] = "low"
         req = urllib.request.Request(API_URL, data=json.dumps(payload).encode(), headers=_headers())
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -109,8 +114,20 @@ def call_groq(messages, model, max_retries=8):
                     _active[k] = new_model
                 model = new_model
                 continue
-            if e.code == 400 and use_json_mode and "response_format" in msg:
-                use_json_mode = False
+            if e.code == 400 and "reasoning_effort" in msg and use_reasoning_effort:
+                use_reasoning_effort = False
+                continue
+            if e.code == 400:
+                # e.g. json_validate_failed when the token budget runs out: give more room, then
+                # drop JSON mode, then give up on this item (it is skipped, not recorded, so a rerun retries it).
+                bad_requests += 1
+                if bad_requests == 1:
+                    max_tokens = 4000
+                elif bad_requests == 2 and use_json_mode:
+                    use_json_mode = False
+                else:
+                    print(f"  Skipping this item after repeated 400 errors: {msg[:150]}")
+                    return None
                 continue
             if e.code == 429 or e.code >= 500:
                 if "per day" in msg.lower() or "tpd" in msg.lower() or "rpd" in msg.lower():
@@ -128,7 +145,7 @@ def call_groq(messages, model, max_retries=8):
             print(f"  Network error ({e}); retrying in {wait}s")
             time.sleep(wait)
             attempt += 1
-        except (json.JSONDecodeError, KeyError, ValueError):
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             attempt += 1
             time.sleep(2)
     sys.exit("Groq call kept failing. Rerun the same command later; finished items are kept.")
@@ -182,6 +199,8 @@ def run_pairwise(args):
                         "Which feedback is better?")
                 verdict = call_groq([{"role": "system", "content": PAIRWISE_SYSTEM},
                                      {"role": "user", "content": user}], args.model)
+                if verdict is None:
+                    continue
                 w = str(verdict.get("winner", "tie")).strip().upper()
                 model_slot = "A" if order == "model_first" else "B"
                 outcome = "tie" if w not in ("A", "B") else ("model" if w == model_slot else "gold")
@@ -224,6 +243,9 @@ def run_diagnosis(args):
                         "Does the feedback identify the introduced flaw?")
                 verdict = call_groq([{"role": "system", "content": DIAGNOSIS_SYSTEM},
                                      {"role": "user", "content": user}], args.model)
+                if verdict is None:
+                    print(f"  {i + 1}/{len(targets)} {key}: skipped (rerun to retry)")
+                    continue
                 rec = {"key": key, "names_flaw": bool(verdict.get("names_flaw")),
                        "reason": verdict.get("reason", ""), "judged": True}
             rec.update({"degradation": r["degradation"], "kind": r["kind"], "judge": judge_model(args.model) if rec.get("judged") else None})
