@@ -290,10 +290,10 @@ def write_handlabel(out_path, recs, fields, seed, n=30, context=None):
 def run_kappa(args):
     from sklearn.metrics import cohen_kappa_score
     with open(args.csv, newline="", encoding="utf-8") as f:
-        rows = [r for r in csv.DictReader(f) if r["human"].strip()]
+        rows = [r for r in csv.DictReader(f) if r.get(args.column, "").strip()]
     norm = lambda v: re.sub(r"\s+", "", str(v)).lower()
     judge = [norm(r["judge"]) for r in rows]
-    human = [norm(r["human"]) for r in rows]
+    human = [norm(r[args.column]) for r in rows]
     agree = sum(a == b for a, b in zip(judge, human)) / len(rows)
     print(f"n={len(rows)} agreement={agree:.3f} cohen_kappa={cohen_kappa_score(judge, human):.3f}")
 
@@ -314,6 +314,7 @@ def main():
     sub.add_parser("models", help="list the Groq models your key can use")
     k = sub.add_parser("kappa")
     k.add_argument("csv")
+    k.add_argument("--column", default="human", help="label column to compare with the judge, e.g. ai_annotator")
     args = parser.parse_args()
     if args.task == "models":
         print("\n".join(available_models()))
