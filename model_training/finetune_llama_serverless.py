@@ -10,10 +10,10 @@ Full held-out baseline run (paper settings, train split only):
     modal run --detach finetune_llama_serverless.py --run-name sft_labeledsplit
 
 Assumes the labeled split exists at model_training/data/feedback_qesconv_labeledsplit/
-(create it with `python make_labeled_split.py`) and a Modal secret named "huggingface"
-holding HF_TOKEN.
+(create it with `python make_labeled_split.py`) and a Modal secret named "anurag-bridge-huggingface"
+holding HF_TOKEN (see PREFIX below).
 
-Outputs go to the "trained-llama-models" volume, under /root/model_training/models/<run-name>/:
+Outputs go to the "anurag-bridge-models" volume, under /root/model_training/models/<run-name>/:
     final_checkpoint/          LoRA adapter
     final_merged_checkpoint/   merged bf16 model, used by generate_eval_serverless.py
     train_config.json, train_log.json
@@ -35,10 +35,15 @@ import os
 
 import modal
 
-app = modal.App("finetune-multilevelfeedback-llama")
+# The salt-nlp Modal workspace is shared, so every app, volume and secret name carries a prefix
+# that cannot collide with other people's (override with MODAL_NAME_PREFIX).
+PREFIX = os.environ.get("MODAL_NAME_PREFIX", "anurag-bridge")
+HF_SECRET_NAME = os.environ.get("MODAL_HF_SECRET", f"{PREFIX}-huggingface")
 
-MODEL_VOLUME = modal.Volume.from_name("trained-llama-models", create_if_missing=True)
-HF_CACHE_VOLUME = modal.Volume.from_name("hf-cache", create_if_missing=True)
+app = modal.App(f"{PREFIX}-finetune")
+
+MODEL_VOLUME = modal.Volume.from_name(f"{PREFIX}-models", create_if_missing=True)
+HF_CACHE_VOLUME = modal.Volume.from_name(f"{PREFIX}-hf-cache", create_if_missing=True)
 
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 MODELS_DIR = "/root/model_training/models"
@@ -69,7 +74,7 @@ image = (
     gpu="H100",
     timeout=4 * 60 * 60,  # hard cap on spend: about $16 at H100 rates
     volumes={MODELS_DIR: MODEL_VOLUME, "/root/hf-cache": HF_CACHE_VOLUME},
-    secrets=[modal.Secret.from_name("huggingface")],
+    secrets=[modal.Secret.from_name(HF_SECRET_NAME)],
 )
 def train_llama_model(
     run_name: str,

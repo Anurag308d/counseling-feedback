@@ -18,7 +18,7 @@ Run from model_training/:
     # quick check on 5 prompts
     modal run generate_eval_serverless.py --model sft_smoke --max-prompts 5
 
-Writes exp/<tag>_<dataset>_eval.json locally (and a copy on the volume under models/exp/).
+Writes exp/<tag>_<dataset>_eval.json locally (and a copy on the anurag-bridge-models volume under exp/).
 Score it with: python evaluate_baseline.py exp/<tag>_<dataset>_eval.json
 """
 import json
@@ -26,10 +26,15 @@ import os
 
 import modal
 
-app = modal.App("generate-eval-multilevelfeedback-llama")
+# The salt-nlp Modal workspace is shared, so every app, volume and secret name carries a prefix
+# that cannot collide with other people's (override with MODAL_NAME_PREFIX).
+PREFIX = os.environ.get("MODAL_NAME_PREFIX", "anurag-bridge")
+HF_SECRET_NAME = os.environ.get("MODAL_HF_SECRET", f"{PREFIX}-huggingface")
 
-MODEL_VOLUME = modal.Volume.from_name("trained-llama-models", create_if_missing=True)
-HF_CACHE_VOLUME = modal.Volume.from_name("hf-cache", create_if_missing=True)
+app = modal.App(f"{PREFIX}-generate-eval")
+
+MODEL_VOLUME = modal.Volume.from_name(f"{PREFIX}-models", create_if_missing=True)
+HF_CACHE_VOLUME = modal.Volume.from_name(f"{PREFIX}-hf-cache", create_if_missing=True)
 MODELS_DIR = "/root/model_training/models"
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
@@ -76,7 +81,7 @@ def build_prompt_ids(tokenizer, text, prompt_style):
     gpu="H100",
     timeout=2 * 60 * 60,
     volumes={MODELS_DIR: MODEL_VOLUME, "/root/hf-cache": HF_CACHE_VOLUME},
-    secrets=[modal.Secret.from_name("huggingface")],
+    secrets=[modal.Secret.from_name(HF_SECRET_NAME)],
 )
 def generate(model: str, tag: str, dataset_name: str, prompts_file: str, prompt_style: str,
              max_prompts: int, max_new_tokens: int):

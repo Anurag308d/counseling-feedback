@@ -5,7 +5,10 @@
 The paper trained on all labeled data, so it has no clean test set. These steps build one.
 Run everything from `model_training/`. You need the Modal CLI (`pip install modal`, `modal setup`),
 access to `meta-llama/Meta-Llama-3.1-8B-Instruct` on Hugging Face, and a Modal secret named
-`huggingface` holding `HF_TOKEN`.
+`anurag-bridge-huggingface` holding `HF_TOKEN`:
+`modal secret create anurag-bridge-huggingface HF_TOKEN=hf_...`
+The shared salt-nlp workspace has other people's apps, so all app, volume and secret names start
+with `anurag-bridge` (set `MODAL_NAME_PREFIX` to change it).
 
 1. Split by conversation (already committed; rerun only to change the split):
    `python make_labeled_split.py`
