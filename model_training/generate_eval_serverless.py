@@ -54,7 +54,10 @@ Reply with a single JSON object and nothing else.
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("vllm==0.6.4.post1")
+    # vllm 0.6.4 only declares transformers>=4.45, so pip otherwise pulls transformers 5.x, whose
+    # tokenizer class vllm cannot use. Pin the same transformers stack as the training image.
+    .pip_install("vllm==0.6.4.post1", "transformers==4.46.3", "tokenizers==0.20.3",
+                 "huggingface_hub==0.26.5", "datasets==3.1.0", "numpy<2")
     .env({"HF_HOME": "/root/hf-cache", "TOKENIZERS_PARALLELISM": "false"})
     .add_local_dir(".", remote_path="/root/model_training",
                    ignore=["venv", "__pycache__", "*.git*", "models", "exp"])
