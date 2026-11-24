@@ -1,0 +1,68 @@
+{
+  "generations": "exp/base_instruct_goal_eval_v0_eval.json",
+  "meta": {
+    "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "model_path": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "tag": "base_instruct",
+    "dataset_name": "goal_eval_v0",
+    "prompts_file": "test_prompts.json",
+    "prompt_style": "instruct_gs",
+    "n": 130,
+    "decoding": {
+      "temperature": 0.0,
+      "max_new_tokens": 512
+    }
+  },
+  "metrics": {
+    "n": 130,
+    "valid_rate": 1.0,
+    "detection_acc": 0.8461538461538461,
+    "detection_balanced_acc": 0.5,
+    "perfect_rate_strong": 0.0,
+    "perfect_rate_degraded": 0.0,
+    "perfect_rate_neg_appropriate": 0.0,
+    "perfect_rate_neg_mistimed": 0.0,
+    "overcorrection": 1.0,
+    "missed_mistimed": 0.0,
+    "goal_setting_named": 0.15454545454545454,
+    "suggestions_penalty": 0.26666666666666666,
+    "pairwise_acc": 0.7454545454545455,
+    "length_baseline_pairwise": 0.9545454545454546,
+    "pairwise_by_degradation": {
+      "imposed": 0.9333333333333333,
+      "mistimed": 1.0,
+      "no_barriers": 0.6666666666666666,
+      "no_followup": 0.8666666666666667,
+      "no_rationale": 0.26666666666666666,
+      "too_ambitious": 0.8666666666666667,
+      "vague": 0.6,
+      "values_unlinked": 0.9333333333333333
+    },
+    "ci95": {
+      "detection_balanced_acc": [
+        0.5,
+        0.5
+      ],
+      "overcorrection": [
+        1.0,
+        1.0
+      ],
+      "missed_mistimed": [
+        0.0,
+        0.0
+      ],
+      "goal_setting_named": [
+        0.09615384615384616,
+        0.22413793103448276
+      ],
+      "suggestions_penalty": [
+        0.06666666666666667,
+        0.5007352941176464
+      ],
+      "pairwise_acc": [
+        0.625,
+        0.8469609582963621
+      ]
+    }
+  }
+}

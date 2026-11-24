@@ -1,0 +1,68 @@
+{
+  "generations": "exp/sft_mixed_x1_goal_eval_v0_eval.json",
+  "meta": {
+    "model": "sft_mixed_x1",
+    "model_path": "/root/model_training/models/sft_mixed_x1/final_merged_checkpoint",
+    "tag": "sft_mixed_x1",
+    "dataset_name": "goal_eval_v0",
+    "prompts_file": "test_prompts.json",
+    "prompt_style": "sft",
+    "n": 130,
+    "decoding": {
+      "temperature": 0.0,
+      "max_new_tokens": 512
+    }
+  },
+  "metrics": {
+    "n": 130,
+    "valid_rate": 0.9923076923076923,
+    "detection_acc": 0.8153846153846154,
+    "detection_balanced_acc": 0.5840909090909091,
+    "perfect_rate_strong": 0.0,
+    "perfect_rate_degraded": 0.0761904761904762,
+    "perfect_rate_neg_appropriate": 1.0,
+    "perfect_rate_neg_mistimed": 0.2,
+    "overcorrection": 0.0,
+    "missed_mistimed": 0.2,
+    "goal_setting_named": 0.7181818181818181,
+    "suggestions_penalty": 0.0,
+    "pairwise_acc": 0.6681818181818182,
+    "length_baseline_pairwise": 0.9545454545454546,
+    "pairwise_by_degradation": {
+      "imposed": 0.7333333333333333,
+      "mistimed": 1.0,
+      "no_barriers": 0.8333333333333334,
+      "no_followup": 0.5666666666666667,
+      "no_rationale": 0.4666666666666667,
+      "too_ambitious": 0.8666666666666667,
+      "vague": 0.4666666666666667,
+      "values_unlinked": 0.6333333333333333
+    },
+    "ci95": {
+      "detection_balanced_acc": [
+        0.48768190298507463,
+        0.6843023255813954
+      ],
+      "overcorrection": [
+        0.0,
+        0.0
+      ],
+      "missed_mistimed": [
+        0.0,
+        0.6
+      ],
+      "goal_setting_named": [
+        0.5760869565217391,
+        0.8362108150470219
+      ],
+      "suggestions_penalty": [
+        0.0,
+        0.0
+      ],
+      "pairwise_acc": [
+        0.5614471452798191,
+        0.7727272727272727
+      ]
+    }
+  }
+}
