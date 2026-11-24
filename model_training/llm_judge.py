@@ -84,7 +84,11 @@ def parse_json_text(text):
     return json.loads(text[start:end + 1])
 
 
+CALL_DELAY = float(os.environ.get("JUDGE_DELAY_SECONDS", "2"))  # pause between calls, for free-tier limits
+
+
 def call_groq(messages, model, max_retries=8):
+    time.sleep(CALL_DELAY)
     model = _active.get(model, model)
     use_json_mode = True
     attempt = 0
@@ -118,10 +122,16 @@ def call_groq(messages, model, max_retries=8):
                 attempt += 1
                 continue
             sys.exit(f"Groq error {e.code}: {msg}")
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
+            # Dropped connections (e.g. ConnectionResetError on a flaky network): back off and retry.
+            wait = min(60, 5 * 2 ** attempt)
+            print(f"  Network error ({e}); retrying in {wait}s")
+            time.sleep(wait)
+            attempt += 1
         except (json.JSONDecodeError, KeyError, ValueError):
             attempt += 1
             time.sleep(2)
-    raise RuntimeError("Groq call failed after retries")
+    sys.exit("Groq call kept failing. Rerun the same command later; finished items are kept.")
 
 
 def judge_model(requested):
