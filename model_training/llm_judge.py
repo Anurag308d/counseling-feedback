@@ -51,8 +51,10 @@ Answer with JSON only: {"reason": "<one sentence>", "names_flaw": true | false}"
 MODELS_URL = "https://api.groq.com/openai/v1/models"
 # Tried in order when the requested model is not available on the account.
 FALLBACK_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct",
+                   "qwen/qwen3.8-27b", "openai/gpt-oss-20b",
                    "meta-llama/llama-4-maverick-17b-128e-instruct", "qwen/qwen3-32b"]
 _active = {}
+_exhausted = set()  # models that hit their daily limit in this run
 
 
 def _headers():
@@ -69,14 +71,19 @@ def available_models():
         return sorted(m["id"] for m in json.load(resp)["data"])
 
 
-def pick_fallback(requested):
+def pick_fallback(requested, why="is not available on this account"):
     models = available_models()
     for m in FALLBACK_MODELS:
-        if m in models and m != requested:
-            print(f"  Model {requested} is not available on this account; switching to {m}.")
+        if m in models and m != requested and m not in _exhausted:
+            print(f"  Model {requested} {why}; switching to {m}.")
             return m
-    sys.exit(f"Model {requested} is not available. Models on this account: {', '.join(models)}\n"
-             "Rerun with --model <one of these> (a large chat model is best).")
+    sys.exit(f"Model {requested} {why} and no fallback is left. Models on this account: {', '.join(models)}\n"
+             "Rerun later (finished calls are kept), or rerun with --model <one of these>.")
+
+
+def _switch(old, new):
+    for k in list(_active) + [old]:
+        _active[k] = new
 
 
 def parse_json_text(text):
@@ -101,6 +108,8 @@ def call_groq(messages, model, max_retries=8):
             payload["response_format"] = {"type": "json_object"}
         if use_reasoning_effort and "gpt-oss" in model:
             payload["reasoning_effort"] = "low"
+        if "qwen3" in model:
+            payload["reasoning_format"] = "hidden"  # keep <think> text out of the JSON answer
         req = urllib.request.Request(API_URL, data=json.dumps(payload).encode(), headers=_headers())
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -110,9 +119,9 @@ def call_groq(messages, model, max_retries=8):
             msg = e.read().decode(errors="ignore")[:300]
             if e.code == 404 or "model_not_found" in msg or "decommissioned" in msg:
                 new_model = pick_fallback(model)
-                for k in list(_active) + [model]:
-                    _active[k] = new_model
+                _switch(model, new_model)
                 model = new_model
+                use_reasoning_effort = "gpt-oss" in model
                 continue
             if e.code == 400 and "reasoning_effort" in msg and use_reasoning_effort:
                 use_reasoning_effort = False
@@ -131,8 +140,13 @@ def call_groq(messages, model, max_retries=8):
                 continue
             if e.code == 429 or e.code >= 500:
                 if "per day" in msg.lower() or "tpd" in msg.lower() or "rpd" in msg.lower():
-                    sys.exit("Daily Groq limit reached for this model. Rerun later (finished calls are kept), "
-                             "or pass --model with another model from: python llm_judge.py models")
+                    # Move on to the next fallback model; each record keeps the judge that made it.
+                    _exhausted.add(model)
+                    new_model = pick_fallback(model, why="hit its daily Groq limit")
+                    _switch(model, new_model)
+                    model = new_model
+                    use_reasoning_effort = "gpt-oss" in model
+                    continue
                 wait = float(e.headers.get("retry-after") or 0) or min(60, 5 * 2 ** attempt)
                 print(f"  Groq {e.code}, waiting {wait:.0f}s: {msg[:150]}")
                 time.sleep(wait)
