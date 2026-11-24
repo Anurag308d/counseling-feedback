@@ -13,6 +13,7 @@ Tasks:
   diagnosis  Part 3. For each degraded or mistimed eval row the model flagged, does its feedback name
              the flaw that was introduced? Rows the model called perfect count as not diagnosed.
       python llm_judge.py diagnosis exp/sft_labeledsplit_goal_eval_v0_eval_goal_metrics_per_example.jsonl
+  models     List the Groq models your key can use (pass one with --model).
   kappa      Agreement between the judge and your own labels (fill the "human" column of the
              *_handlabel.csv file that each task writes, with the same values the judge uses).
       python llm_judge.py kappa exp/..._judge_diagnosis_handlabel.csv
@@ -47,34 +48,84 @@ Decide whether the feedback identifies that specific flaw (the same problem, in 
 Answer with JSON only: {"reason": "<one sentence>", "names_flaw": true | false}"""
 
 
-def call_groq(messages, model, max_retries=8):
+MODELS_URL = "https://api.groq.com/openai/v1/models"
+# Tried in order when the requested model is not available on the account.
+FALLBACK_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct",
+                   "meta-llama/llama-4-maverick-17b-128e-instruct", "qwen/qwen3-32b"]
+_active = {}
+
+
+def _headers():
     key = os.environ.get("GROQ_API_KEY")
     if not key:
         sys.exit("Set GROQ_API_KEY in this terminal first (see the top of llm_judge.py).")
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0,
-                       "max_tokens": 200, "response_format": {"type": "json_object"}}).encode()
-    for attempt in range(max_retries):
-        req = urllib.request.Request(API_URL, data=body, headers={
-            "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-            "User-Agent": "counseling-feedback-judge"})
+    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+            "User-Agent": "counseling-feedback-judge"}
+
+
+def available_models():
+    req = urllib.request.Request(MODELS_URL, headers=_headers())
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return sorted(m["id"] for m in json.load(resp)["data"])
+
+
+def pick_fallback(requested):
+    models = available_models()
+    for m in FALLBACK_MODELS:
+        if m in models and m != requested:
+            print(f"  Model {requested} is not available on this account; switching to {m}.")
+            return m
+    sys.exit(f"Model {requested} is not available. Models on this account: {', '.join(models)}\n"
+             "Rerun with --model <one of these> (a large chat model is best).")
+
+
+def parse_json_text(text):
+    start, end = text.find("{"), text.rfind("}")
+    return json.loads(text[start:end + 1])
+
+
+def call_groq(messages, model, max_retries=8):
+    model = _active.get(model, model)
+    use_json_mode = True
+    attempt = 0
+    while attempt < max_retries:
+        payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 400}
+        if use_json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        req = urllib.request.Request(API_URL, data=json.dumps(payload).encode(), headers=_headers())
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = json.load(resp)
-            return json.loads(data["choices"][0]["message"]["content"])
+            return parse_json_text(data["choices"][0]["message"]["content"])
         except urllib.error.HTTPError as e:
-            if e.code == 429 or e.code >= 500:
-                wait = float(e.headers.get("retry-after") or 0) or min(60, 5 * 2 ** attempt)
-                msg = e.read().decode(errors="ignore")[:200]
-                print(f"  Groq {e.code}, waiting {wait:.0f}s: {msg}")
-                if "per day" in msg.lower() or "tpd" in msg.lower() or "rpd" in msg.lower():
-                    sys.exit("Daily Groq limit reached. Rerun later (cached calls are kept), or pass "
-                             "--model with another Groq model.")
-                time.sleep(wait)
+            msg = e.read().decode(errors="ignore")[:300]
+            if e.code == 404 or "model_not_found" in msg or "decommissioned" in msg:
+                new_model = pick_fallback(model)
+                for k in list(_active) + [model]:
+                    _active[k] = new_model
+                model = new_model
                 continue
-            sys.exit(f"Groq error {e.code}: {e.read().decode(errors='ignore')[:300]}")
-        except (json.JSONDecodeError, KeyError):
+            if e.code == 400 and use_json_mode and "response_format" in msg:
+                use_json_mode = False
+                continue
+            if e.code == 429 or e.code >= 500:
+                if "per day" in msg.lower() or "tpd" in msg.lower() or "rpd" in msg.lower():
+                    sys.exit("Daily Groq limit reached for this model. Rerun later (finished calls are kept), "
+                             "or pass --model with another model from: python llm_judge.py models")
+                wait = float(e.headers.get("retry-after") or 0) or min(60, 5 * 2 ** attempt)
+                print(f"  Groq {e.code}, waiting {wait:.0f}s: {msg[:150]}")
+                time.sleep(wait)
+                attempt += 1
+                continue
+            sys.exit(f"Groq error {e.code}: {msg}")
+        except (json.JSONDecodeError, KeyError, ValueError):
+            attempt += 1
             time.sleep(2)
     raise RuntimeError("Groq call failed after retries")
+
+
+def judge_model(requested):
+    return _active.get(requested, requested)
 
 
 def load_cache(path):
@@ -125,7 +176,7 @@ def run_pairwise(args):
                 model_slot = "A" if order == "model_first" else "B"
                 outcome = "tie" if w not in ("A", "B") else ("model" if w == model_slot else "gold")
                 rec = {"key": key, "example_id": r["example_id"], "order": order, "outcome": outcome,
-                       "reason": verdict.get("reason", ""), "judge": args.model}
+                       "reason": verdict.get("reason", ""), "judge": judge_model(args.model)}
                 out.write(json.dumps(rec) + "\n")
                 out.flush()
                 cache[key] = rec
@@ -135,7 +186,7 @@ def run_pairwise(args):
     if n:
         for o in ("model", "gold", "tie"):
             print(f"{o:6s} wins: {sum(x['outcome'] == o for x in recs) / n:.3f}")
-        print(f"({n} judgments on {len(pool)} examples, both orders; judge {args.model})")
+        print(f"({n} judgments on {len(pool)} examples, both orders; judge {judge_model(args.model)})")
     write_handlabel(out_path, recs, ["outcome"], args.seed)
 
 
@@ -165,7 +216,7 @@ def run_diagnosis(args):
                                      {"role": "user", "content": user}], args.model)
                 rec = {"key": key, "names_flaw": bool(verdict.get("names_flaw")),
                        "reason": verdict.get("reason", ""), "judged": True}
-            rec.update({"degradation": r["degradation"], "kind": r["kind"], "judge": args.model})
+            rec.update({"degradation": r["degradation"], "kind": r["kind"], "judge": judge_model(args.model) if rec.get("judged") else None})
             out.write(json.dumps(rec) + "\n")
             out.flush()
             cache[key] = rec
@@ -218,9 +269,13 @@ def main():
     for s in (p, d):
         s.add_argument("--model", default=DEFAULT_MODEL)
         s.add_argument("--seed", type=int, default=42)
+    sub.add_parser("models", help="list the Groq models your key can use")
     k = sub.add_parser("kappa")
     k.add_argument("csv")
     args = parser.parse_args()
+    if args.task == "models":
+        print("\n".join(available_models()))
+        return
     {"pairwise": run_pairwise, "diagnosis": run_diagnosis, "kappa": run_kappa}[args.task](args)
 
 
