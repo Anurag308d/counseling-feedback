@@ -47,11 +47,12 @@ PREFILL = '{"perfect":'
 AREAS = ["Reflections", "Questions", "Suggestions", "Validation", "Self-disclosure",
          "Empathy", "Professionalism", "Structure"]
 
-INSTRUCT_SYSTEM = f"""You give feedback to peer counselors (Helpers) on their last response in an emotional-support conversation with a Seeker.
+def instruct_system(areas):
+    return f"""You give feedback to peer counselors (Helpers) on their last response in an emotional-support conversation with a Seeker.
 Reply with a single JSON object and nothing else.
 - If the Helper's last response is already appropriate: {{"perfect": true, "goodareas": [...]}}
 - Otherwise: {{"perfect": false, "goodareas": [...], "feedback": "...", "badareas": [...], "alternative": "..."}}
-"goodareas" lists what the response does well and "badareas" what needs improvement, using only these areas: {", ".join(AREAS)}.
+"goodareas" lists what the response does well and "badareas" what needs improvement, using only these areas: {", ".join(areas)}.
 "feedback" states the goal of the response and how it could be improved, in one or two sentences. "alternative" is an improved Helper response."""
 
 image = (
@@ -70,10 +71,12 @@ def build_prompt_ids(tokenizer, text, prompt_style):
     """text is a full prompt ending in '### Response:' (labeled-split test_prompts.json format)."""
     if prompt_style == "sft":
         return tokenizer(text + PREFILL, add_special_tokens=True)["input_ids"]
-    if prompt_style == "instruct":
+    if prompt_style in ("instruct", "instruct_gs"):
+        # instruct_gs adds the new "Goal Setting" area, for the goal-setting eval (part 3)
+        areas = AREAS + (["Goal Setting"] if prompt_style == "instruct_gs" else [])
         conversation = text.split("### Input:\n", 1)[1].split("### Response:", 1)[0].strip()
         messages = [
-            {"role": "system", "content": INSTRUCT_SYSTEM},
+            {"role": "system", "content": instruct_system(areas)},
             {"role": "user", "content": f"Conversation:\n{conversation}\n\nGive feedback to the Helper's last response."},
         ]
         chat = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
