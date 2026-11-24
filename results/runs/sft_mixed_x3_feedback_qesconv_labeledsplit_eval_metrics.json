@@ -1,0 +1,250 @@
+{
+  "generations": "exp/sft_mixed_x3_feedback_qesconv_labeledsplit_eval.json",
+  "meta": {
+    "model": "sft_mixed_x3",
+    "model_path": "/root/model_training/models/sft_mixed_x3/final_merged_checkpoint",
+    "tag": "sft_mixed_x3",
+    "dataset_name": "feedback_qesconv_labeledsplit",
+    "prompts_file": "test_prompts.json",
+    "prompt_style": "sft",
+    "n": 1697,
+    "decoding": {
+      "temperature": 0.0,
+      "max_new_tokens": 512
+    }
+  },
+  "subsets": {
+    "original": {
+      "n": 982,
+      "valid_rate": 0.9938900203665988,
+      "perfect_accuracy": 0.7057026476578412,
+      "perfect_balanced_acc": 0.7451009664492811,
+      "gold_perfect_rate": 0.27189409368635437,
+      "pred_perfect_rate": 0.4745417515274949,
+      "perfect_auroc": 0.8466881433173568,
+      "goodareas_micro_p": 0.4,
+      "goodareas_micro_r": 0.5677233429394812,
+      "goodareas_micro_f1": 0.4693269803454437,
+      "goodareas_macro_f1": 0.33474883725878724,
+      "goodareas_per_area_f1": {
+        "Reflections": 0.2857142857142857,
+        "Questions": 0.4015748031496063,
+        "Suggestions": 0.13114754098360656,
+        "Validation": 0.4789915966386554,
+        "Self-disclosure": 0.0,
+        "Empathy": 0.523219814241486,
+        "Professionalism": 0.2,
+        "Structure": 0.6573426573426574
+      },
+      "n_gold_not_perfect": 715,
+      "badareas_micro_p": 0.5300546448087432,
+      "badareas_micro_r": 0.3750966744006187,
+      "badareas_micro_f1": 0.43931159420289856,
+      "badareas_macro_f1": 0.33682794151647044,
+      "badareas_per_area_f1": {
+        "Reflections": 0.0821917808219178,
+        "Questions": 0.5207956600361663,
+        "Suggestions": 0.6217616580310881,
+        "Validation": 0.3051948051948052,
+        "Self-disclosure": 0.6067415730337079,
+        "Empathy": 0.45267489711934156,
+        "Professionalism": 0.10526315789473684,
+        "Structure": 0.0
+      },
+      "n_text_pairs": 471,
+      "feedback_bleu": 20.529690458502973,
+      "feedback_rougeL": 0.42692696567584615,
+      "alternative_bleu": 11.012165927404602,
+      "alternative_rougeL": 0.29225054070394807,
+      "ci95": {
+        "valid_rate": [
+          0.9888429622032978,
+          0.998017839444995
+        ],
+        "perfect_accuracy": [
+          0.6759238022426096,
+          0.7352707058963417
+        ],
+        "perfect_balanced_acc": [
+          0.7161111093073109,
+          0.7739838056538971
+        ],
+        "perfect_auroc": [
+          0.8199943549479208,
+          0.8706386255124395
+        ],
+        "goodareas_micro_f1": [
+          0.44630774570599785,
+          0.4908426848624074
+        ],
+        "goodareas_macro_f1": [
+          0.3017336167354756,
+          0.36288714638882397
+        ],
+        "badareas_micro_f1": [
+          0.41107658420801885,
+          0.4675690258603928
+        ],
+        "badareas_macro_f1": [
+          0.3120489094459519,
+          0.3599528308620228
+        ],
+        "feedback_bleu": [
+          19.633040715446782,
+          21.363460504896338
+        ],
+        "feedback_rougeL": [
+          0.4174262674194669,
+          0.43602559947995273
+        ],
+        "alternative_bleu": [
+          9.912303110323196,
+          12.090657928818093
+        ],
+        "alternative_rougeL": [
+          0.2808100977836397,
+          0.3042678083444998
+        ]
+      }
+    },
+    "gold_alternative": {
+      "n": 715,
+      "valid_rate": 1.0,
+      "perfect_accuracy": 0.9888111888111888,
+      "perfect_balanced_acc": 0.9888111888111888,
+      "gold_perfect_rate": 1.0,
+      "pred_perfect_rate": 0.9888111888111888,
+      "goodareas_micro_p": 0.5765998707175177,
+      "goodareas_micro_r": 0.6303886925795052,
+      "goodareas_micro_f1": 0.6022957461174882,
+      "goodareas_macro_f1": 0.40775084422781993,
+      "goodareas_per_area_f1": {
+        "Reflections": 0.13253012048192772,
+        "Questions": 0.731958762886598,
+        "Suggestions": 0.10909090909090909,
+        "Validation": 0.5288888888888889,
+        "Self-disclosure": 0.2679425837320574,
+        "Empathy": 0.7551789077212806,
+        "Professionalism": 0.30476190476190473,
+        "Structure": 0.4316546762589928
+      },
+      "n_gold_not_perfect": 0,
+      "n_text_pairs": 0,
+      "ci95": {
+        "valid_rate": [
+          1.0,
+          1.0
+        ],
+        "perfect_accuracy": [
+          0.979704395408315,
+          0.9958858904132536
+        ],
+        "perfect_balanced_acc": [
+          0.979704395408315,
+          0.9958858904132536
+        ],
+        "goodareas_micro_f1": [
+          0.5795227978338661,
+          0.6260606352041708
+        ],
+        "goodareas_macro_f1": [
+          0.37618533387714725,
+          0.4400859517109016
+        ]
+      }
+    },
+    "all": {
+      "n": 1697,
+      "valid_rate": 0.9964643488509134,
+      "perfect_accuracy": 0.8249852681202121,
+      "perfect_balanced_acc": 0.802384885989774,
+      "gold_perfect_rate": 0.5786682380671774,
+      "pred_perfect_rate": 0.6912197996464349,
+      "perfect_auroc": 0.9474499024397192,
+      "goodareas_micro_p": 0.5078988941548184,
+      "goodareas_micro_r": 0.6097676623992413,
+      "goodareas_micro_f1": 0.5541909071320836,
+      "goodareas_macro_f1": 0.39867833828361016,
+      "goodareas_per_area_f1": {
+        "Reflections": 0.16744186046511628,
+        "Questions": 0.6504854368932039,
+        "Suggestions": 0.1206896551724138,
+        "Validation": 0.5116279069767442,
+        "Self-disclosure": 0.2393162393162393,
+        "Empathy": 0.667447306791569,
+        "Professionalism": 0.24888888888888885,
+        "Structure": 0.5835294117647059
+      },
+      "n_gold_not_perfect": 715,
+      "badareas_micro_p": 0.5300546448087432,
+      "badareas_micro_r": 0.3750966744006187,
+      "badareas_micro_f1": 0.43931159420289856,
+      "badareas_macro_f1": 0.33682794151647044,
+      "badareas_per_area_f1": {
+        "Reflections": 0.0821917808219178,
+        "Questions": 0.5207956600361663,
+        "Suggestions": 0.6217616580310881,
+        "Validation": 0.3051948051948052,
+        "Self-disclosure": 0.6067415730337079,
+        "Empathy": 0.45267489711934156,
+        "Professionalism": 0.10526315789473684,
+        "Structure": 0.0
+      },
+      "n_text_pairs": 471,
+      "feedback_bleu": 20.529690458502973,
+      "feedback_rougeL": 0.42692696567584615,
+      "alternative_bleu": 11.012165927404602,
+      "alternative_rougeL": 0.29225054070394807,
+      "ci95": {
+        "valid_rate": [
+          0.9935293165529897,
+          0.998845948548796
+        ],
+        "perfect_accuracy": [
+          0.8065490048788515,
+          0.843151393581081
+        ],
+        "perfect_balanced_acc": [
+          0.7801954132568704,
+          0.8225922674009005
+        ],
+        "perfect_auroc": [
+          0.9366949741571093,
+          0.9572039869719612
+        ],
+        "goodareas_micro_f1": [
+          0.5370235279813664,
+          0.5705929120764913
+        ],
+        "goodareas_macro_f1": [
+          0.37510357463575666,
+          0.42224659325350783
+        ],
+        "badareas_micro_f1": [
+          0.4108817327852735,
+          0.46618879104800476
+        ],
+        "badareas_macro_f1": [
+          0.3130056865968525,
+          0.35840662297214454
+        ],
+        "feedback_bleu": [
+          19.638152325952024,
+          21.40579601037464
+        ],
+        "feedback_rougeL": [
+          0.4172819935532503,
+          0.43541388539060466
+        ],
+        "alternative_bleu": [
+          9.808868530214015,
+          12.268713153233648
+        ],
+        "alternative_rougeL": [
+          0.28006009356433875,
+          0.30513820876632797
+        ]
+      }
+    }
+  }
+}

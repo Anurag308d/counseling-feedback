@@ -27,6 +27,28 @@ with `anurag-bridge` (set `MODAL_NAME_PREFIX` to change it).
    `python evaluate_baseline.py exp/sft_labeledsplit_feedback_qesconv_labeledsplit_eval.json --bertscore`
    Headline numbers are the `original` subset.
 
+### Goal-setting eval and mixed SFT fix (parts 2 to 4)
+
+6. Goal-setting eval set (130 synthetic rows over 20 contexts, rubric in `data/goal_eval_v0/rubric.md`):
+   `python make_goal_eval_dataset.py`
+   `modal run generate_eval_serverless.py --model sft_labeledsplit --dataset-name goal_eval_v0`
+   `modal run generate_eval_serverless.py --model meta-llama/Meta-Llama-3.1-8B-Instruct --prompt-style instruct_gs --tag base_instruct --dataset-name goal_eval_v0`
+   `python evaluate_goal_eval.py exp/sft_labeledsplit_goal_eval_v0_eval.json`
+7. Mixed SFT: 208 synthetic goal-setting examples (disjoint from the eval set) mixed into the train split once (x1, 3.1%) or three times (x3, 8.8%):
+   `python build_goal_train.py`
+   `modal run --detach finetune_llama_serverless.py --run-name sft_mixed_x1 --dataset-name feedback_mixed_x1`
+   `modal run --detach finetune_llama_serverless.py --run-name sft_mixed_x3 --dataset-name feedback_mixed_x3`
+   then repeat steps 4 to 6 with `--model sft_mixed_x1` / `sft_mixed_x3`.
+8. LLM judge on Groq (an open, non-frontier model; set `GROQ_API_KEY` in the terminal first):
+   `python llm_judge.py pairwise exp/sft_labeledsplit_feedback_qesconv_labeledsplit_eval_metrics_per_example.jsonl`
+   `python llm_judge.py diagnosis exp/sft_mixed_x1_goal_eval_v0_eval_goal_metrics_per_example.jsonl`
+   Calls are cached, so a rerun resumes. If a model hits its daily limit the script moves to the next one on the account and records which judge made each verdict.
+
+### Results
+
+All outputs of the runs reported in the final report are in `results/runs/` (see `results/README.md`).
+The judge was checked against 30 labels from an AI annotator, not a human: `results/base_instruct_diagnosis_ai_annotator.csv` (Cohen's kappa 0.89).
+
 ## Original paper commands
 
 ### Fine-tuning the model
