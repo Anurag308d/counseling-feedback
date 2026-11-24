@@ -260,21 +260,31 @@ def run_diagnosis(args):
     print(f"\nDiagnosis rate overall: {sum(x['names_flaw'] for x in recs) / len(recs):.3f} (n={len(recs)})")
     for k, v in sorted(by_type.items()):
         print(f"  {k:16s} {sum(v) / len(v):.3f} (n={len(v)})")
-    write_handlabel(out_path, [x for x in recs if x.get("judged")], ["names_flaw"], args.seed)
+    context = {r["row_id"]: {"flaw": evalset[r["row_id"]]["flaw"],
+                             "model_feedback": (r["pred"] or {}).get("feedback", "")} for r in targets}
+    write_handlabel(out_path, [x for x in recs if x.get("judged")], ["names_flaw"], args.seed, context=context)
 
 
-def write_handlabel(out_path, recs, fields, seed, n=30):
+def write_handlabel(out_path, recs, fields, seed, n=30, context=None):
+    """Write a CSV for hand-labelling. context maps key -> {column: text} shown to the labeller."""
     sample = list(recs)
     random.Random(seed).shuffle(sample)
     path = os.path.splitext(out_path)[0] + "_handlabel.csv"
     if os.path.exists(path):
-        return
+        with open(path, newline="", encoding="utf-8") as f:
+            existing = list(csv.DictReader(f))
+        # Keep a file the user already started filling in.
+        if any(r.get("human", "").strip() for r in existing) or (context and "model_feedback" in (existing[0] if existing else {})):
+            return
+    extra = ["flaw", "model_feedback"] if context else []
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["key", "judge", "human", "judge_reason"])
+        w.writerow(["key", *extra, "human", "judge", "judge_reason"])
         for rec in sample[:n]:
-            w.writerow([rec["key"], rec[fields[0]], "", rec.get("reason", "")])
-    print(f"Wrote {path}: fill the 'human' column, then run: python llm_judge.py kappa {path}")
+            ctx = (context or {}).get(rec["key"], {})
+            w.writerow([rec["key"], *[ctx.get(c, "") for c in extra], "", rec[fields[0]], rec.get("reason", "")])
+    print(f"Wrote {path}: fill the 'human' column (True/False) before looking at 'judge', then run: "
+          f"python llm_judge.py kappa {path}")
 
 
 def run_kappa(args):
